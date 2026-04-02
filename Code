@@ -1,0 +1,115 @@
+{
+  "name": "Project 5 - WhatsApp Follow-up from Google Sheet",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 10 * * 1-6" }] }
+      },
+      "id": "p5-001",
+      "name": "Trigger 10AM Mon-Sat",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "documentId": { "__rl": true, "value": "YOUR_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Sheet1", "mode": "name" },
+        "filtersUI": { "values": [{ "lookupColumn": "WA_Status", "lookupValue": "Pending" }] },
+        "options": { "returnFirstMatch": false }
+      },
+      "id": "p5-002",
+      "name": "Get Pending WA Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst today = new Date().toISOString().split('T')[0];\n\nconst due = rows.filter(r => {\n  const d = r.json.Next_WA_Date || '';\n  const count = parseInt(r.json.WA_Count || '0');\n  const phone = r.json.Phone_Number || '';\n  return d <= today && count < 3 && phone.startsWith('+');\n});\n\nreturn due.map(r => r.json);"
+      },
+      "id": "p5-003",
+      "name": "Filter Due Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.item.json;\nconst count = parseInt(row.WA_Count || '0');\n\nconst messages = [\n  'Hello ' + (row.Buyer_Name || 'Sir') + '! This is YOUR_FROM_NAME from YOUR_COMPANY_NAME. We export YOUR_PRODUCT to ' + (row.Country || 'your country') + '. Would you like our product catalog and pricing? Please reply YES to receive it.',\n  'Hi ' + (row.Buyer_Name || 'Sir') + ', following up on my earlier message. Our YOUR_PRODUCT is available for immediate export shipment. Interested in a competitive price quote? We have been exporting since 2010.',\n  'Hello ' + (row.Buyer_Name || 'Sir') + ', this is my final follow-up. If you ever need YOUR_PRODUCT exports, please remember YOUR_COMPANY_NAME. We offer best quality + competitive prices. Thank you! - YOUR_FROM_NAME'\n];\n\nconst nextDays = [3, 5, 0];\nconst nextDate = new Date();\nnextDate.setDate(nextDate.getDate() + nextDays[count]);\n\nreturn {\n  ...row,\n  wa_message: messages[count] || messages[0],\n  new_count: count + 1,\n  next_wa_date: nextDays[count] > 0 ? nextDate.toISOString().split('T')[0] : '',\n  new_status: count >= 2 ? 'Completed' : 'Pending'\n};"
+      },
+      "id": "p5-004",
+      "name": "Build WA Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.twilio.com/2010-04-01/Accounts/YOUR_TWILIO_SID/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "From", "value": "whatsapp:+YOUR_WA_NUMBER" },
+            { "name": "To", "value": "=whatsapp:{{ $json.Phone_Number }}" },
+            { "name": "Body", "value": "={{ $json.wa_message }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "p5-005",
+      "name": "Send WhatsApp via Twilio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "value": "YOUR_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Sheet1", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "WA_Status": "={{ $('Build WA Message').item.json.new_status }}",
+            "WA_Count": "={{ $('Build WA Message').item.json.new_count }}",
+            "Next_WA_Date": "={{ $('Build WA Message').item.json.next_wa_date }}",
+            "Last_WA_At": "={{ new Date().toISOString() }}",
+            "Notes": "WA message sent successfully",
+            "Row_Number": "={{ $('Build WA Message').item.json.Row_Number }}"
+          },
+          "matchingColumns": ["Row_Number"]
+        }
+      },
+      "id": "p5-006",
+      "name": "Update Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [1060, 300]
+    },
+    {
+      "parameters": { "amount": 10, "unit": "seconds" },
+      "id": "p5-007",
+      "name": "Wait 10 Seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1060, 480]
+    }
+  ],
+  "connections": {
+    "Trigger 10AM Mon-Sat": { "main": [[{ "node": "Get Pending WA Rows", "type": "main", "index": 0 }]] },
+    "Get Pending WA Rows": { "main": [[{ "node": "Filter Due Messages", "type": "main", "index": 0 }]] },
+    "Filter Due Messages": { "main": [[{ "node": "Build WA Message", "type": "main", "index": 0 }]] },
+    "Build WA Message": { "main": [[{ "node": "Send WhatsApp via Twilio", "type": "main", "index": 0 }]] },
+    "Send WhatsApp via Twilio": { "main": [[{ "node": "Update Sheet", "type": "main", "index": 0 }]] },
+    "Update Sheet": { "main": [[{ "node": "Wait 10 Seconds", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": ["WhatsApp", "Follow-up", "Twilio", "Google Sheets"],
+  "pinData": {}, "staticData": null, "versionId": "1"
+}
